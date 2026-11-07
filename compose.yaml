@@ -1,0 +1,45 @@
+name: disttrainbench
+
+x-node: &node
+  image: disttrainbench:dev
+  build:
+    context: .
+    dockerfile: Dockerfile
+  init: true
+  working_dir: /workspace
+  command: ["sleep", "infinity"]
+  networks:
+    - bench
+  volumes:
+    - ./workspace:/workspace
+    - ./data:/data
+    - ./runs:/runs
+
+services:
+  coordinator:
+    <<: *node
+    container_name: disttrainbench-coordinator
+    cpus: "${COORDINATOR_CPUS:-1.0}"
+    mem_limit: "${COORDINATOR_MEMORY:-4g}"
+    stdin_open: true
+    tty: true
+    environment:
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+
+  worker-1:
+    <<: *node
+    container_name: disttrainbench-worker-1
+    cpus: "${WORKER_CPUS:-1.0}"
+    mem_limit: "${WORKER_MEMORY:-4g}"
+
+  worker-2:
+    <<: *node
+    container_name: disttrainbench-worker-2
+    cpus: "${WORKER_CPUS:-1.0}"
+    mem_limit: "${WORKER_MEMORY:-4g}"
+
+networks:
+  bench:
+    name: disttrainbench
+    driver: bridge
