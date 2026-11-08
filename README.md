@@ -4,7 +4,7 @@ DistTrainBench is an early-stage benchmark prototype for evaluating an AI agent'
 
 ## Benchmark concept
 
-The agent runs in a coordinator container and plans and coordinates training across worker containers connected through a Docker bridge network. The intended benchmark uses different CPU, memory, and network limits across containers to create a heterogeneous training environment.
+The agent runs in a coordinator container and plans and coordinates training across worker containers connected through a Docker bridge network. The prototype gives the coordinator and workers different CPU and memory limits and rate-limits inter-container traffic.
 
 The training task is to train ResNet-20 on CIFAR-100. The agent runs for a fixed wall-clock budget (one hour by default), then the harness scores its final checkpoint using top-1 accuracy on the CIFAR-100 test split.
 
@@ -19,9 +19,9 @@ The scored architecture is `disttrainbench.ResNet20`: a 3x3 CIFAR stem, three st
 
 ## Current prototype
 
-The current Docker setup starts one coordinator and two workers from the same CPU-only image on a per-run Docker bridge network. The workers are reachable as `worker-1` and `worker-2`. A manual Compose start uses `/workspace`, `/data`, and `/runs`; the evaluation harness mounts separate host directories for each run.
+The current Docker setup starts one coordinator and eight workers from the same CPU-only image on a per-run Docker bridge network. The workers are reachable as `worker-1` through `worker-8`. A manual Compose start uses `/workspace`, `/data`, and `/runs`; the evaluation harness mounts separate host directories for each run.
 
-The Compose configuration sets separate CPU and memory limits for the coordinator and workers. Both workers currently use the same limits, and network bandwidth or latency limits are not configured yet. The default limits are 0.5 CPU and 4 GB of memory per container.
+The coordinator defaults to 0.125 CPU and 4 GB of memory. Each of the eight workers defaults to 0.125 CPU and 1 GB of memory. The combined defaults are 1.125 CPUs and 12 GB across all nine training containers. Workers have identical limits, and the coordinator has the same CPU limit to constrain training done there while retaining memory for the agent. Inter-container traffic is capped at 200 kbit/s aggregate in each direction per container, from `1 Gbps / (5 * 10^3)`. Egress uses a token-bucket shaper; ingress uses policing that drops excess packets. At startup, each training container gets a fixed egress delay sampled uniformly as an integer from 1 to 700 ms. A round trip includes the delays set on both endpoints. The selected delays appear in the agent prompt and run metadata. External traffic, including CIFAR downloads and agent API calls, is not rate-limited. No additional random delay or random packet loss is configured. One-shot shaper sidecars apply Linux `tc` in each container's network namespace; training containers drop `NET_ADMIN` so the agent cannot remove the configured qdisc.
 
 The agent image includes the Codex CLI and Claude Code. Provider keys are read from `.env` by the host runner and injected only into the selected CLI process in the coordinator; the coordinator and workers do not inherit them as container-wide environment variables. Workers receive only the per-run worker API token.
 
@@ -63,7 +63,7 @@ Each run gets its own workspace snapshot, empty training-data directory, and out
 
 Each run is saved under `runs/<run-id>/`:
 
-- `metadata.json`: host and container limits, network profile, software versions, measured host throughput, duration, and score
+- `metadata.json`: host and container limits, network profile and rate, software versions, measured host throughput, duration, and score
 - `events.jsonl`: timestamped run lifecycle events
 - `agent.prompt.txt`: the task prompt provided to the agent, when one is used
 - `agent.stdout.log` and `agent.stderr.log`: CLI JSON/event stream and stderr, with secret values redacted
@@ -75,7 +75,7 @@ Before publishing artifacts, the harness redacts configured API keys and tokens 
 
 The host FP32 benchmark uses OpenBLAS SGEMM with a 4096x4096 matrix and up to two threads by default. Its library version/configuration, actual thread count, and measured throughput are recorded. If OpenBLAS is not installed on the host, the metadata records that the measurement was unavailable. The run also records host CPU details, worker count, each container's CPU and memory limits, network profile, PyTorch and torchvision versions, Codex CLI and Claude Code versions, agent model and duration, and final top-1 score. Throughput is recorded as run context; it is not used to rescale the score.
 
-Use the same time limit and resource settings when comparing runs. `--no-build` reuses the existing image, `--skip-host-benchmark` skips the host SGEMM measurement, and `--run-id` sets a readable run directory name.
+Use the same time limit and resource settings when comparing runs. `NETWORK_RATE_BPS` in `.env` sets the inter-container cap (200000 by default); `--network-rate-bps` overrides it for one run. The rate is expressed in bits per second. The Docker host kernel must support `tc` ingress policing, TBF egress shaping, and `netem` delay. `--no-build` reuses the existing image, `--skip-host-benchmark` skips the host SGEMM measurement, and `--run-id` sets a readable run directory name.
 
 ## Start the containers
 
@@ -84,13 +84,13 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-Adjust `COORDINATOR_CPUS`, `COORDINATOR_MEMORY`, `WORKER_CPUS`, and `WORKER_MEMORY` in `.env` after checking the host's available resources. Both workers use the same `WORKER_*` limits. The default limits across all three containers add up to 1.5 CPUs and 12 GB of memory.
+Adjust `COORDINATOR_CPUS`, `COORDINATOR_MEMORY`, `WORKER_CPUS`, and `WORKER_MEMORY` in `.env` after checking the host's available resources. All eight workers use the same `WORKER_*` limits. The default limits across the coordinator and workers add up to 1.125 CPUs and 12 GB of memory.
 
 Useful commands:
 
 ```bash
 docker compose exec coordinator bash
 docker compose exec worker-1 bash
-docker compose exec worker-2 bash
+docker compose exec worker-8 bash
 docker compose down
 ```

@@ -81,6 +81,7 @@ def render_task_prompt(
     run_id: str,
     time_limit_seconds: int,
     workers: list[str],
+    network_latencies: dict[str, int],
 ) -> str:
     template = template_path.read_text(encoding="utf-8")
     replacements = {
@@ -89,6 +90,9 @@ def render_task_prompt(
         "{{RUN_ID}}": run_id,
         "{{TIME_LIMIT}}": str(time_limit_seconds),
         "{{WORKERS}}": ", ".join(workers),
+        "{{NETWORK_LATENCIES}}": ", ".join(
+            f"{container}: {delay} ms" for container, delay in sorted(network_latencies.items())
+        ),
     }
     for placeholder, value in replacements.items():
         template = template.replace(placeholder, value)
@@ -252,7 +256,7 @@ def inspect_config(compose: list[str], env: dict[str, str]) -> tuple[dict[str, A
     network = {
         name: {
             "driver": (config.get("networks", {}).get(name) or {}).get("driver", "bridge"),
-            "profile": "unshaped Docker bridge; no bandwidth or latency limits configured",
+            "profile": "Docker bridge; inter-container traffic is rate-shaped, external traffic is unshaped",
         }
         for name in network_names
     }
@@ -274,6 +278,83 @@ def container_limits(compose: list[str], services: list[str], env: dict[str, str
             "memory_bytes": host_config.get("Memory"),
         }
     return limits
+
+
+def wait_for_network_shapers(
+    compose: list[str],
+    docker: str,
+    services: list[str],
+    env: dict[str, str],
+    timeout_seconds: int = 60,
+) -> dict[str, dict[str, Any]]:
+    pending = set(services)
+    configurations: dict[str, dict[str, Any]] = {}
+    deadline = time.monotonic() + timeout_seconds
+    while pending:
+        for service in list(pending):
+            result = subprocess.run(
+                compose + ["ps", "--all", "-q", service],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                env=env,
+                check=False,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or f"could not inspect {service}"
+                raise RuntimeError(detail)
+            container_ids = result.stdout.strip().splitlines()
+            if not container_ids:
+                continue
+            inspect = json.loads(run_checked([docker, "inspect", container_ids[0]], env=env))
+            state = inspect[0].get("State", {})
+            if state.get("Status") in {"exited", "dead"}:
+                if state.get("ExitCode") != 0:
+                    logs = subprocess.run(
+                        compose + ["logs", "--no-color", service],
+                        cwd=ROOT,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        timeout=30,
+                        env=env,
+                        check=False,
+                    )
+                    detail = logs.stdout.strip()[-2000:]
+                    raise RuntimeError(
+                        f"network shaper {service} exited with code {state.get('ExitCode')}: {detail}"
+                    )
+                logs = subprocess.run(
+                    compose + ["logs", "--no-color", service],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=30,
+                    env=env,
+                    check=False,
+                )
+                marker = "DISTTRAINBENCH_NETWORK_SHAPER="
+                for line in logs.stdout.splitlines():
+                    marker_index = line.find(marker)
+                    if marker_index < 0:
+                        continue
+                    record = json.loads(line[marker_index + len(marker):])
+                    if record.get("event") == "network_shaping_configured":
+                        target = service.removeprefix("shape-")
+                        record["container"] = target
+                        configurations[target] = record
+                        break
+                if service.removeprefix("shape-") not in configurations:
+                    raise RuntimeError(f"network shaper {service} did not report its configuration")
+                pending.remove(service)
+        if pending and time.monotonic() >= deadline:
+            raise RuntimeError(f"network shapers did not complete: {', '.join(sorted(pending))}")
+        if pending:
+            time.sleep(0.2)
+    return configurations
 
 
 def container_package_versions(compose: list[str], env: dict[str, str]) -> dict[str, Any]:
@@ -428,6 +509,11 @@ def main() -> int:
     parser.add_argument("--run-id", help="Lowercase letters, digits, and hyphens")
     parser.add_argument("--benchmark-matrix-size", type=int, default=4096)
     parser.add_argument("--benchmark-threads", type=int, default=2)
+    parser.add_argument(
+        "--network-rate-bps",
+        type=int,
+        help="Inter-container bandwidth limit in bits per second (default from .env, 200000)",
+    )
     parser.add_argument("--skip-host-benchmark", action="store_true")
     parser.add_argument("--no-build", action="store_true", help="Use the existing Docker image")
     args = parser.parse_args()
@@ -443,6 +529,17 @@ def main() -> int:
 
     host_environment = read_dotenv(ROOT / ".env")
     host_environment.update(os.environ)
+    try:
+        network_rate_bps = (
+            args.network_rate_bps
+            if args.network_rate_bps is not None
+            else int(host_environment.get("NETWORK_RATE_BPS", "200000"))
+        )
+    except ValueError:
+        parser.error("NETWORK_RATE_BPS must be an integer number of bits per second")
+    if network_rate_bps <= 0:
+        parser.error("--network-rate-bps / NETWORK_RATE_BPS must be positive")
+    host_environment["NETWORK_RATE_BPS"] = str(network_rate_bps)
     api_key_env = args.api_key_env
     if args.agent == "codex":
         api_key_env = "CODEX_API_KEY"
@@ -532,6 +629,19 @@ def main() -> int:
             "transport": "HTTP on the per-run Docker bridge network",
             "authentication": "random per-run bearer token",
         }
+        metadata["network_shaping"] = {
+            "requested_rate_expression": "1 Gbps / (5 * 10^3)",
+            "rate_bits_per_second": network_rate_bps,
+            "rate_kbit_per_second": network_rate_bps / 1000,
+            "scope": "aggregate IPv4/IPv6 traffic to and from the per-run Docker subnet, per container",
+            "directions": "ingress and egress",
+            "implementation": "egress TBF shaping and ingress policing with excess packets dropped",
+            "random_latency_range_ms": [1, 700],
+            "latency_sampling": "one uniformly selected integer per training container at startup",
+            "latency_direction": "egress to other containers; a round trip includes both endpoint delays",
+            "external_traffic": "unshaped",
+            "enforcement": "one-shot NET_ADMIN shaper services; training containers drop NET_ADMIN",
+        }
         write_json(metadata_path, metadata)
 
         up = compose + ["up", "-d"]
@@ -541,6 +651,22 @@ def main() -> int:
         log_event(events_path, "containers_starting")
         up_started = True
         run_checked(up, timeout=1800, env=compose_environment)
+        shaper_services = ["shape-coordinator", *(f"shape-{worker}" for worker in config_meta["workers"])]
+        shaping_configs = wait_for_network_shapers(
+            compose, docker, shaper_services, compose_environment
+        )
+        metadata["network_shaping"]["container_settings"] = shaping_configs
+        log_event(
+            events_path,
+            "network_shaping_ready",
+            rate_bits_per_second=network_rate_bps,
+            shaped_services=len(shaper_services),
+            egress_latency_ms={
+                name: setting["egress_latency_ms"]
+                for name, setting in shaping_configs.items()
+            },
+        )
+        write_json(metadata_path, metadata)
         metadata["actual_container_limits"] = container_limits(
             compose, ["coordinator", *config_meta["workers"]], compose_environment
         )
@@ -565,6 +691,10 @@ def main() -> int:
                 run_id=run_id,
                 time_limit_seconds=args.time_limit_seconds,
                 workers=config_meta["workers"],
+                network_latencies={
+                    name: int(setting["egress_latency_ms"])
+                    for name, setting in shaping_configs.items()
+                },
             )
             if prompt_template_path
             else None

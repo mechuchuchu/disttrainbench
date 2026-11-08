@@ -35,6 +35,7 @@ Poll `GET http://WORKER:8765/jobs/JOB_ID` for status and `GET http://WORKER:8765
 - Coordinator checkpoint path: `{{CHECKPOINT}}`
 - Training data path: `{{DATA_DIR}}`
 - Worker names: `{{WORKERS}}`
-- Workers may have different compute, memory, and network limits. Discover the available resources and design accordingly.
+- The coordinator defaults to 0.125 CPU and 4 GB of memory. Each of the eight workers defaults to 0.125 CPU and 1 GB of memory; the worker limits are identical in this run. Compose settings may override these values, so inspect the actual container limits and adapt.
+- Traffic between containers on the per-run Docker bridge is capped at 200 kbit/s aggregate in each direction per container. Each container also has a fixed egress delay, randomly selected at startup from 1 to 700 ms: {{NETWORK_LATENCIES}}. A round trip includes the egress delay at both endpoints. External traffic, including dataset downloads and model API calls, is not rate-limited. Ingress policing drops packets above the rate cap; no additional random packet loss is configured.
 
 Do not rely on access to the host Docker daemon. Use the worker HTTP APIs for remote process execution. Leave enough time to write and verify the final checkpoint before the deadline.

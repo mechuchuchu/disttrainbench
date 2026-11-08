@@ -8,6 +8,8 @@ x-node: &node
   init: true
   working_dir: /workspace
   command: ["sleep", "infinity"]
+  cap_drop:
+    - NET_ADMIN
   environment:
     DISTTRAINBENCH_WORKER_TOKEN: "${WORKER_TOKEN:-local-development-token}"
     DISTTRAINBENCH_WORKER_PORT: "8765"
@@ -18,10 +20,22 @@ x-node: &node
     - ${TRAIN_DATA_DIR:-./data}:/data
     - ${RUN_OUTPUT_DIR:-./runs}:/runs
 
+x-network-shaper: &network-shaper
+  image: disttrainbench:dev
+  entrypoint: ["python", "-m", "disttrainbench.shape_network"]
+  command: [
+    "--rate-bps", "${NETWORK_RATE_BPS:-200000}",
+    "--latency-min-ms", "1",
+    "--latency-max-ms", "700",
+  ]
+  cap_add:
+    - NET_ADMIN
+  restart: "no"
+
 services:
   coordinator:
     <<: *node
-    cpus: "${COORDINATOR_CPUS:-0.5}"
+    cpus: "${COORDINATOR_CPUS:-0.125}"
     mem_limit: "${COORDINATOR_MEMORY:-4g}"
     stdin_open: true
     tty: true
@@ -32,14 +46,113 @@ services:
   worker-1:
     <<: *node
     command: ["python", "-m", "disttrainbench.worker"]
-    cpus: "${WORKER_CPUS:-0.5}"
-    mem_limit: "${WORKER_MEMORY:-4g}"
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
 
   worker-2:
     <<: *node
     command: ["python", "-m", "disttrainbench.worker"]
-    cpus: "${WORKER_CPUS:-0.5}"
-    mem_limit: "${WORKER_MEMORY:-4g}"
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-3:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-4:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-5:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-6:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-7:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  worker-8:
+    <<: *node
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.125}"
+    mem_limit: "${WORKER_MEMORY:-1g}"
+
+  shape-coordinator:
+    <<: *network-shaper
+    network_mode: "service:coordinator"
+    depends_on:
+      coordinator:
+        condition: service_started
+
+  shape-worker-1:
+    <<: *network-shaper
+    network_mode: "service:worker-1"
+    depends_on:
+      worker-1:
+        condition: service_started
+
+  shape-worker-2:
+    <<: *network-shaper
+    network_mode: "service:worker-2"
+    depends_on:
+      worker-2:
+        condition: service_started
+
+  shape-worker-3:
+    <<: *network-shaper
+    network_mode: "service:worker-3"
+    depends_on:
+      worker-3:
+        condition: service_started
+
+  shape-worker-4:
+    <<: *network-shaper
+    network_mode: "service:worker-4"
+    depends_on:
+      worker-4:
+        condition: service_started
+
+  shape-worker-5:
+    <<: *network-shaper
+    network_mode: "service:worker-5"
+    depends_on:
+      worker-5:
+        condition: service_started
+
+  shape-worker-6:
+    <<: *network-shaper
+    network_mode: "service:worker-6"
+    depends_on:
+      worker-6:
+        condition: service_started
+
+  shape-worker-7:
+    <<: *network-shaper
+    network_mode: "service:worker-7"
+    depends_on:
+      worker-7:
+        condition: service_started
+
+  shape-worker-8:
+    <<: *network-shaper
+    network_mode: "service:worker-8"
+    depends_on:
+      worker-8:
+        condition: service_started
 
 networks:
   bench:

@@ -11,6 +11,7 @@ RUN apt-get update \
         coreutils \
         curl \
         git \
+        iproute2 \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
