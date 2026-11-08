@@ -41,7 +41,7 @@ python3 scripts/evaluate_run.py \
   --time-limit-seconds 3600
 ```
 
-Add `--model MODEL_ID` to pin an explicit model supported by the chosen CLI; otherwise its configured default is used.
+Add `--model-name MODEL_ID` to pin an explicit model supported by the chosen CLI; `--model` is an alias. If neither is set, the CLI's configured default is used. The selected identifier is recorded in run metadata.
 
 The default task prompt is saved as `runs/<run-id>/agent.prompt.txt` and sent to the CLI on standard input. Codex runs in JSONL event mode; Claude Code runs in stream-JSON mode. Their output is saved in `agent.stdout.log` and `agent.stderr.log` for trace review, with configured keys and tokens redacted before publication. These modes expose tool and command activity, which can help reviewers identify use of the test split or pretrained weights; trace review remains observational and does not prevent prohibited actions. Override the task prompt with `--prompt-file PATH`.
 

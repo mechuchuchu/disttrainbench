@@ -501,7 +501,10 @@ def main() -> int:
     agent_group = parser.add_mutually_exclusive_group(required=True)
     agent_group.add_argument("--agent", choices=("codex", "claude"), help="Run a supported coding-agent CLI")
     agent_group.add_argument("--agent-command", help="Custom shell command to run inside coordinator")
-    parser.add_argument("--model", help="Model identifier passed to the selected built-in CLI")
+    parser.add_argument(
+        "--model", "--model-name", dest="model",
+        help="Model identifier passed to the selected built-in CLI and recorded in metadata",
+    )
     parser.add_argument("--api-key-env", choices=("CODEX_API_KEY", "ANTHROPIC_API_KEY"),
                         help="Provider key to expose to a custom command")
     parser.add_argument("--prompt-file", help="Prompt file for the agent; defaults to the benchmark prompt")
