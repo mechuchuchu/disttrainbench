@@ -8,38 +8,39 @@ x-node: &node
   init: true
   working_dir: /workspace
   command: ["sleep", "infinity"]
+  environment:
+    DISTTRAINBENCH_WORKER_TOKEN: "${WORKER_TOKEN:-local-development-token}"
+    DISTTRAINBENCH_WORKER_PORT: "8765"
   networks:
     - bench
   volumes:
-    - ./workspace:/workspace
-    - ./data:/data
-    - ./runs:/runs
+    - ${WORKSPACE_DIR:-./workspace}:/workspace
+    - ${TRAIN_DATA_DIR:-./data}:/data
+    - ${RUN_OUTPUT_DIR:-./runs}:/runs
 
 services:
   coordinator:
     <<: *node
-    container_name: disttrainbench-coordinator
-    cpus: "${COORDINATOR_CPUS:-1.0}"
+    cpus: "${COORDINATOR_CPUS:-0.5}"
     mem_limit: "${COORDINATOR_MEMORY:-4g}"
     stdin_open: true
     tty: true
     environment:
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      DISTTRAINBENCH_WORKER_TOKEN: "${WORKER_TOKEN:-local-development-token}"
+      DISTTRAINBENCH_WORKER_PORT: "8765"
 
   worker-1:
     <<: *node
-    container_name: disttrainbench-worker-1
-    cpus: "${WORKER_CPUS:-1.0}"
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.5}"
     mem_limit: "${WORKER_MEMORY:-4g}"
 
   worker-2:
     <<: *node
-    container_name: disttrainbench-worker-2
-    cpus: "${WORKER_CPUS:-1.0}"
+    command: ["python", "-m", "disttrainbench.worker"]
+    cpus: "${WORKER_CPUS:-0.5}"
     mem_limit: "${WORKER_MEMORY:-4g}"
 
 networks:
   bench:
-    name: disttrainbench
     driver: bridge
